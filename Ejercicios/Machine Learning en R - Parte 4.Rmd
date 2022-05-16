@@ -1,0 +1,190 @@
+---
+title: "Machine Learning en R - Parte 4"
+author: "Alejandro José Gómez García"
+date: "15/5/2022"
+output: html_document
+---
+
+Temas tratados en este documento:
+ - Técnicas de ensamble
+   - Bagging
+   - Random forest
+   - Boosting techniques (Gradient Boosting, AdaBoosting, XGBoosting)
+   
+ 
+```{r}
+#Paquetes necesarios:
+library(caTools)
+library(dummies)
+library(leaps)
+library(glmnet)
+library(foreach)
+library(MASS)
+library(class)
+library(rpart)
+library(rpart.plot)
+library(e1071)
+library(gbm)
+library(adabag)
+library(xgboost)
+library(randomForest)
+library(caret)
+```
+
+TÉCNICAS DE ENSAMBLE
+```{r}
+#Importamos los datos y utilizando la función summary vemos que hay NA en la variable Tm_taken
+movie <- read.csv("C:/Users/Shiro/Desktop/Datos/Movie_regression.csv")
+summary(movie)
+
+#Procedemos a eliminar los NA de Time_taken y sustituirlos por la media de dicha variable
+movie$Time_taken[is.na(movie$Time_taken)]<-mean(movie$Time_taken, na.rm=TRUE)
+
+#Ahora dividimos nuestros datos en dos: una parte para entrenamiento y la otra para prueba (train y test), para ello necesitamos el paquete caTools
+
+set.seed(0)
+split=sample.split(movie,SplitRatio = 0.8)  #dividimos los datos en dos partes, en una proporción de 8 a 2, en realidad split es una varibale que almacena solamente el 80% de los datos
+train=subset(movie,split==TRUE)     #creamos el subset para el entrenamiento, split==TRUE significa que nos quedamos con lo que almacenó la variable split (80% de los datos)
+test=subset(movie,split==FALSE)
+```
+
+Bagging:
+
+ - Es necesario instalar el paquete "randomForest".
+ - El principal objetivo intrínseco de los algoritmos de bagging es el de la reducción de la varianza.
+ - Un forma de reducir la varianza de las estimaciones es promediando estimaciones de distintos modelos o algoritmos.
+ - Para obtener la agregación de las salidas de cada modelo simple e independiente, bagging puede usar la votación para los métodos de clasificiación y el promedio para los métodos de regresión.
+
+```{r}
+set.seed(0)
+```
+
+Creamos la variable bagging donde guardaremos el modelo crado por la función randomForest. El parámetro "mtry" es la cantidad de variables predictoras queremos considerar para construir el modelo. En este caso utilizamos todas (17). Cuando se utilizan  todas las variables predictoras disponibles se denomina "Bagging". Si se reduce el número de variables predictoras utilizadas entonces se convierte en un caso de "random forest".
+
+```{r}
+bagging=randomForest(Collection~., data = train, mtry=17)
+test$bagging<-predict(bagging,test)
+MSE2bagging<-mean((test$bagging-test$Collection)^2)
+```
+
+Random Forest:
+
+ - La idea esencial del bagging es promediar muchos modelos ruidosos pero aproximadamente imparciales, y por tanto reducir la variación. 
+ - Los árboles son los candidatos ideales para el bagging, dado que ellos pueden registrar estructuras de interacción compleja en los datos, y si crecen suficientemente profundo, tienen relativamente baja parcialidad. 
+ - Producto de que los árboles son notoriamente ruidosos, ellos se benefician enormemente al promediar. 
+
+```{r}
+randomfor<-randomForest(Collection~., data = train, ntree=1000, mtry = 5, replace=T)
+
+#ntree = número de árboles
+#mtry = número de variables por árbol
+#replace= T = con reemplazamiento
+```
+
+```{r}
+#Predecimos la salida
+test$random<-predict(randomfor, test)
+MSE2randomforest<-mean((test$random-test$Collection)^2)
+
+#Vemos las variables más importantes
+
+importance(randomfor)
+```
+
+Para cada predictor se devuelven dos valores:
+ - %IncMSE: disminución media de la precisión de las predicciones sobre las muestras OOB cuando la variable dada se excluye del modelo.
+ - IncNodePurity: medida de la disminución total de impureza de los nodos (medida por el training RSS) que resulta de la división de la variable dada.
+ - Los predictores más importantes se corresponderán a aquellos con mayor %IncMSE y IncNodePurity.
+
+
+GRADIENT BOOSTING
+Requiere del paquete "gbm".
+```{r}
+set.seed(0)
+boosting=gbm(Collection~., data = train, distribution = "gaussian", n.trees = 5000, interaction.depth = 4, shrinkage = 0.2, verbose = F)
+
+#distribution="Gaussian" para una regresión y "Bernoulli" para una clasificación
+
+test$boost=predict(boosting, test, n.trees=5000)
+MSE2boost<-mean((test$boost-test$Collection)^2)
+```
+
+ADABOOSTING
+Requiere el paquete "adabag"
+```{r}
+#Importamos los datos y utilizando la función summary vemos que hay NA en la variable Tm_taken
+movie <- read.csv("C:/Users/Shiro/Desktop/Datos/Movie_classification.csv")
+summary(movie)
+
+#Porcedemos a eliminar los NA de Time_taken y sustituirlos por la media de dicha variable
+movie$Time_taken[is.na(movie$Time_taken)]<-mean(movie$Time_taken, na.rm=TRUE)
+
+set.seed(0)
+split=sample.split(movie,SplitRatio = 0.8)  #dividimos los datos en dos partes, en una proporción de 8 a 2, en realidad split es una varibale que almacena solamente el 80% de los datos
+trainc=subset(movie,split==TRUE)     #creamos el subset para el entrenamiento, split==TRUE significa que nos quedamos con lo que almacenó la variable split (80% de los datos)
+testc=subset(movie,split==FALSE)
+
+#Convertimos la variable clasificatoria DE NUMÉRICA A FACTOR (0 y 1) para poder utilizarla como variable dependiente (la hacemos numérica)
+trainc$Start_Tech_Oscar1 <- as.factor(trainc$Start_Tech_Oscar)
+
+#Hacemos el entrenamiento
+adaboost <- boosting(Start_Tech_Oscar1~.-Start_Tech_Oscar, data=trainc, boos=TRUE)
+View(trainc)
+
+#Hacemos la predicción y vemos la eficacia del método
+predada <- predict(adaboost, testc)
+table(predada$class, testc$Start_Tech_Oscar)
+
+t1<-adaboost$trees[[1]]
+plot(t1)
+text(t1, pretty = 60)
+
+```
+
+XGBOOST
+```{r}
+#Importamos los datos y utilizando la función summary vemos que hay NA en la variable Tm_taken
+movie <- read.csv("C:/Users/Shiro/Desktop/Datos/Movie_classification.csv")
+summary(movie)
+
+#Porcedemos a eliminar los NA de Time_taken y sustituirlos por la media de dicha variable
+movie$Time_taken[is.na(movie$Time_taken)]<-mean(movie$Time_taken, na.rm=TRUE)
+
+set.seed(0)
+split=sample.split(movie,SplitRatio = 0.8)  #dividimos los datos en dos partes, en una proporción de 8 a 2, en realidad split es una varibale que almacena solamente el 80% de los datos
+trainc=subset(movie,split==TRUE)     #creamos el subset para el entrenamiento, split==TRUE significa que nos quedamos con lo que almacenó la variable split (80% de los datos)
+testc=subset(movie,split==FALSE)
+```
+
+ - Primero tenemos que separar las variables (la dependiente de las independientes) tanto en el entrenamiento como en la prueba
+ - Ponemos las variables dependientes.
+ - El código pone "Start_Tech_Oscar" en una nueva variable, =="1" significa que los valores de 1 los convertirá en TRUE, mientras que los diferentes a 1 en FALSE.
+ - Si en lugar de =="1" fuese =="0", entonces los valores 0 los convierte a TRUE y los diferentes a FALSE.
+
+```{r}
+trainY=trainc$Start_Tech_Oscar=="1"
+testY=testc$Start_Tech_Oscar=="1"
+
+#Ponemos las variables independientes
+trainX <- model.matrix(Start_Tech_Oscar ~.-1, data=trainc)
+trainX<- trainX[,-12] #Eliminamos la variable adicional (da info redundante)
+testX<-model.matrix(Start_Tech_Oscar ~.-1, data=testc)
+testX<- testX[,-12] #Eliminamos la variable adicional (da info redundante)
+
+#Creamos las matrices para los sets de entrenamiento y otra para los test
+Xmatrix <- xgb.DMatrix(data = trainX, label=trainY)
+Xmatrix_t <- xgb.DMatrix(data = testX, label=testY)
+
+#Para ver todas las posibles opciones ver la ayuda de la función "xgboost"
+Xgboosting <- xgboost(data=Xmatrix,  #los datos
+                      nrounds = 50,  #número máximo de iteraciones del boost
+                      objetive="multi:softmax", #configura xgboost para realizar una clasificación multiclase utilizando el objetivo softmax. 
+                      eta=0.3,   #controlar la tasa de aprendizaje: escala la contribución de cada árbol por un factor de 0 <eta <1 cuando se suma a la aproximación actual. Se utiliza para evitar el sobreajuste haciendo que el proceso de refuerzo sea más conservador. Un valor más bajo para eta implica un valor más grande para nrounds: un valor bajo de eta significa que el modelo es más robusto al sobreajuste pero más lento para calcular. 
+                      num_class=2,  #cantidad de clases
+                      max_depth=100) #profundidad máxima de cada árbol
+
+xgpred <- predict(Xgboosting, Xmatrix_t)
+table(testY, xgpred)
+
+```
+

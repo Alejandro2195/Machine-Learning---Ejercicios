@@ -1,0 +1,153 @@
+---
+title: "Machine Learning en R - Parte 3"
+author: "Alejandro José Gómez García"
+date: "15/5/2022"
+output: html_document
+---
+
+Temas tratados en este documento:
+ - Árboles de decisión simples 
+ - Árbol de clasificación simple
+
+```{r}
+#Paquetes necesarios:
+library(caTools)
+library(dummies)
+library(leaps)
+library(glmnet)
+library(foreach)
+library(MASS)
+library(class)
+library(rpart)
+library(rpart.plot)
+```
+
+ÁRBOLES DE DECISIÓN
+
+VENTAJAS:
+-  Son fáciles de explicar
+-  Pueden ser graficados e interpretados por alguien ajeno a su creación
+-  Pueden manejar predictores cualitativos sin la necesidad de crear "dummy variables" (ejemplo: no tener que sustituir el si y el no por 1 y 0)
+
+DESVENTAJAS
+-  Por lo general, no tienen el mismo nivel de eficiencia al predecir que otros métodos de regresión y clasificación
+-  Presentan una alta varianza
+
+REGRESSION TREES (Árboles de Regresión)
+- Se utilizan para variables cuantitativas continuas
+- Para decidir donde hacer el split en el árbol se utiliza RSS (suma de cuadrados residuales)
+
+Nota: se realizan y se visualizan con los paquetes rpart y rpart.plot
+
+Preparación de los datos
+```{r}
+#Importamos los datos y utilizando la función summary vemos que hay NA en la variable Tm_taken
+movie <- read.csv("C:/Users/Shiro/Desktop/Datos/Movie_regression.csv")
+summary(movie)
+
+#Porcedemos a eliminar los NA de Time_taken y sustituirlos por la media de dicha variable
+movie$Time_taken[is.na(movie$Time_taken)]<-mean(movie$Time_taken, na.rm=TRUE)
+```
+
+Ahora dividimos nuestros datos en dos: una parte para entrenamiento y la otra para prueba (train y test), para ello necesitamos el paquete caTools
+
+```{r}
+set.seed(0)
+split=sample.split(movie,SplitRatio = 0.8)  #dividimos los datos en dos partes, en una proporción de 8 a 2, en realidad split es una varibale que almacena solamente el 80% de los datos
+train=subset(movie,split==TRUE)     #creamos el subset para el entrenamiento, split==TRUE significa que nos quedamos con lo que almacenó la variable split (80% de los datos)
+test=subset(movie,split==FALSE)     #creamos el subset para la prueba, split==FALSE significa que nos quedamos con lo que NO almacenó la variable split (20% de los datos)
+```
+
+Corremos un modelo de árbol de regressión sobre el set de entrenamiento
+```{r}
+regtree<-rpart(formula = Collection~., data = train,control = rpart.control(maxdepth = 3))
+```
+
+En este caso lo que se quiere saber es la relación entre la variable "Collection" con el resto de las variables. Entonces, "collection" sería mi variable independiente y el resto serían variables dependientes.
+
+"formula = Collection~." se refiere a las variables dependientes que se incluirán en el modelo, "Collection~." significa "todo a la izquierda de Collection", al ser collection la última variable se seleccionan todas las variables anteriores a ella.
+
+En data se especifica donde están almacenadas las variables y lo datos a utilizar, si no se rellena el parámetro fórmula no tiene sentido ya que dicho parámetro solo busca en data especificada.
+
+rpart.control son una serie de parámetros para especificar cómo deseas que se construya el árbol (profundidad, número de nodos, etc).
+
+En este caso solo le pondremos una profundidad de 3, no queremos un árbol demasiando grande ya que resulta más difícil de interpretar y hay más probabilidades de "sobreajuste" (overfitting) y no será capaz de responder a la generalidad.
+
+```{r}
+#Se realiza ahora un plot del árbol creado
+rpart.plot(regtree,box.palette = "RdBu", digits = -3)
+
+#Predecimos valores en cualquier punto para probar el árbol
+test$pred<-predict(regtree,test,type = "vector")
+
+#Una vez hecho est podemos comparar los valores de test$Collection con los predichos por el modelo en test$pred 
+
+#Calculamos el error cuadrático medio (mean-squared error) para saber qué tan efectivo fue el modelo. Esto básicamente nos da una idea de la diferencia entre los valores predichos y los reales
+MSE2<-mean((test$pred-test$Collection)^2)
+
+#Esta vez construyo el mismo árbol pero sin limitar la profundidad del árbol (los niveles)
+fulltree<- rpart(formula = Collection~., data = train, control = rpart.control(cp=0))
+rpart.plot(fulltree, box.palette = "RdBu", digits=-3)
+
+printcp(fulltree) #Imprimo los componentes principales del árbol creado
+plotcp(fulltree)  #Ploteo los componenetes principales del árbol creado
+```
+
+Ahora buscamos el valor de CP que corresponda con el menor error (xerror). Para ello, hacemos que la fila sea la del valor mínimo de xerror en regtree$cptable (como no sabemos cual es usamos la funcion which.min para ubicarla). Luego, la columna será solo la de "CP" que es la que nos interesa.
+
+```{r}
+mincp<- regtree$cptable[which.min(regtree$cptable[,"xerror"]), "CP"]
+```
+
+"Podar el árbol"
+
+Ahora comenzamos con la poda del árbol, que no es más que que reducir el tamaño de los árboles de decisión al eliminar secciones del árbol que no son críticas y son redundantes para la clasificación. 
+
+```{r}
+prunedtree<-prune(fulltree,cp = mincp)
+rpart.plot(prunedtree, box.palette = "RdBu", digits=-3)
+
+#Ahora testeamos el árbol completo y comprobamos su error con la partición que habíamos hehco para ello (test)
+test$fulltree<-predict(object = fulltree, newdata = test, type = "vector")
+MSE2full<-mean((test$fulltree - test$Collection)^2)
+
+View(test)
+
+#Ahora testeamos el árbol ya podado a ver si ha mejorado con respecto a los anteriores (con los mismos datos)
+test$pruned<-predict(object = prunedtree, newdata = test, type = "vector")
+MSE2pruned<- mean((test$pruned - test$Collection)^2)
+```
+
+Classification Trees (Árboles de clasificación)
+
+Se utiliza para variables categóricas discretas (ganar o perder, alto o bajo).
+Para decidir el split se puede usar "classification error rate" (tasa de error de clasificación), "Gini index" (índice gini) o "Cross entropy" (entropía cruzada).
+"Gini index" y "Cross entropy" son mejores indicadores que "classification error rate".
+
+```{r}
+#Primero importamos los datos
+df <- read.csv("C:/Users/Shiro/Desktop/Datos/Movie_classification.csv")
+View(df)
+
+#Luego hacemos el preprocesamiento de los datos, en este caso sustituir los valores NA
+summary(df)
+df$Time_taken[is.na(df$Time_taken)]<-mean(df$Time_taken,na.rm=TRUE)
+
+#subdividimos los datos en dos subconjuntos, uno para entrenamiento y otro para la prueba
+set.seed(0)
+split=sample.split(movie,SplitRatio = 0.8)
+trainc=subset(df,split==TRUE)
+testc=subset(df,split==FALSE)
+
+#Luego creamos el árbol de clasificación y lo corremos sobre el subset de entrenamiento
+classtree<-rpart(formula = Start_Tech_Oscar~.,data = trainc, method = "class",control = rpart.control(maxdepth=3))
+
+#Ploteamos el árbol
+rpart.plot(classtree,box.palette = "RdBu", digits = -3, type=2)
+
+#Predecimos valores (los guardamos en una nueva columna en el subset testc) y comparamos con los valores reales
+testc$pred<-predict(classtree,testc,type = "class")
+View(testc)
+table(testc$Start_Tech_Oscar,testc$pred)
+```
+

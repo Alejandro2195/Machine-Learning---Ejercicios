@@ -1,0 +1,157 @@
+---
+title: "Machine Learning - Parte 2"
+author: "Alejandro José Gómez García"
+date: "15/5/2022"
+output: html_document
+---
+
+Temas tratados en este documento:
+ - Regresión logística
+ - Análisis de discriminante lineal
+ - K-Nearest Neighbour
+ - Comparación de resultados de los modelos
+ 
+```{r}
+#Paquetes necesarios:
+library(caTools)
+library(dummies)
+library(leaps)
+library(glmnet)
+library(foreach)
+library(MASS)
+library(class)
+```
+
+Preparación de los datos
+NOTA: La base de datos contiene casas con sus respectivos precios y otras características, además muestra cuales de ellas fueron vendidas
+
+```{r}
+df<-read.csv("C:/Users/Shiro/Desktop/Datos/House-Price.csv")
+df
+
+df$avg_dist=(df$dist1+df$dist2+df$dist3+df$dist4)/4 #Calculamos la distancia promedio para poder eliminar las 4 variables de distancia que dan información redundante
+df
+View(df)
+df2<-df[,-6:-9] #Creamos otro dataset con las variables redundantes ya eliminadas
+df<-df2
+rm(df2)
+
+df<-df[,-13] #Eliminamos la columna 14 ya que era completamente inútil (bus_term) al ser todos los valores iguales
+```
+
+Creación de "Dummy variables"
+- Para realizar una correlación entre dos variables, evidentemente deben tener valores numéricos.
+- Por ello puede ser difícil incluir en estos análisis variables nominales.
+- Una solución a esto y una manera de incluir variables nominales es crear nuevas variables categóricas.
+- Por ejemplo, si queremos ver la presencia o ausencia podemos sustituir los nombres por 0 y 1 respectivamente.
+
+Para ello necesitamos cargar el paquete "dummies"
+
+```{r}
+df<-dummy.data.frame(df) #Transformamos las variables nominales en categóricas
+View(df)
+```
+
+Esta función crea una variable por cada categoría, sin embargo, no todas son necesarias ya que hay información redundante. Por ello eliminamos esas variables redundantes. Por ejemplo: si tenemos las variables "Presencia de x" y "Ausencia de x" podemos eliminar una de ellas (dado que los valores en ambas son 0 y 1, dan la misma información)
+
+```{r}
+df<-df[,-8] 
+df<-df[,-13]
+df
+```
+
+Eliminar valores NA
+
+```{r}
+which(is.na(df$n_hos_beds))
+df$n_hos_beds[which(is.na(df$n_hos_beds))]<-mean(df$n_hos_beds,na.rm = TRUE)
+```
+
+Análisis de correlación en los datos
+
+```{r}
+cor(df)
+round(cor(df),2) #Redondeamos el resultdos a dos cifras significativas después de la coma
+```
+
+Regresión logística con predictor simple 
+
+```{r}
+glm.fit=glm(Sold~price,data = df, family = binomial) #Vemos si según cierto predictor se puede predecir si la casa será venida (es decir, cuanto influencia cierto predictor en dicha venta)
+summary(glm.fit)
+```
+
+Regresión logística con predictores múltiples
+
+```{r}
+glm.fit2=glm(Sold~.,data = df, family = binomial)  #Vemos si cada predictor puede predecir si la casa será venida (es decir, cuanto influencian los predictores en dicha venta)
+summary(glm.fit2)
+```
+
+PREDICCIÓN DE PROBABILIDADES ASIGNANDO CLASES Y ELABORACIÓN DE MATRIX DE CONFUSIÓN
+
+```{r}
+glm.probs = predict(glm.fit2, type = "response") #response hace que devuelva las probabilidades predichas por la función
+glm.probs[1:10]
+
+#Lo que hicimos en las anteriores líneas es buscar la probabilidad de que las casas sean vendidas según los predictores
+
+glm.pred=rep("NO",506)
+glm.pred[glm.probs>0.5]="YES"  #Utilizamos las probabilidades anteriores para hacer una matrix donde a las probabilidades de venta mayores a 0.5 corresponda un "YES" (se vendió la casa) y un "NO" para las menores a 0.5
+
+table(glm.pred, df$Sold) #Hcemos la matrix de confusión, 0 significa no vendida y 1 sí. Se puede ver la cantidad de errores tipo 1 y 2 que hubo en la predicción
+
+
+```
+
+DISCRIMINANTE LINEAL
+Es necesario el paquete MASS
+```{r}
+lda.fit=lda(Sold~., data=df)
+lda.fit
+
+lda.predict=predict(lda.fit,df)   #Predice si se venderá o no de acuerdo a las probabilidades dadas por el discriminante lineal (>0.5 =venderá, <0.5=no venderá)
+lda.predict$posterior
+
+lda.class=lda.predict$class
+table(lda.class, df$Sold)        #Hacemos la matrix de consfusión
+
+sum(lda.predict$posterior[,1]>0.8)  #calculamos la cantidad de casas con una probabilidad mayor al 80% de venderse
+```
+
+Test-Train Split
+```{r}
+set.seed(0)
+split=sample.split(df,SplitRatio = 0.8)
+train_set=subset(df, split==TRUE)
+test_set=subset(df, split==FALSE)
+
+train.fit=glm(Sold~.,data = train_set, family = binomial)
+test.probs=predict(train.fit,test_set,type = "response")
+
+test.pred=rep("NO", 120)
+test.pred[test.probs>0.5]="YES"
+table(test.pred,test_set$Sold)
+```
+
+K-Nearest Neighbors
+Nota: la escala de las variables importa e influye, por lo que es necesario estandarizarlas
+```{r}
+trainX=train_set[,-16]  #omitimos la variable Sold del set de entrenamiento ya que es el resultado
+testX=test_set[,-16]    #omitimos la variable Sold del set de prueba ya que es el resultado
+
+trainy=train_set$Sold   
+testy=test_set$Sold
+
+k=1
+
+trainX_s=scale(trainX)
+testX_s=scale(testX)
+
+set.seed(0)
+
+knn.pred=knn(train = trainX_s,test = testX_s, cl = trainy, k=k)
+
+table(knn.pred,testy)   #matrix de confusión
+
+```

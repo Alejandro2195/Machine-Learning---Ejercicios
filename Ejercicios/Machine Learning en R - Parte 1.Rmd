@@ -1,0 +1,286 @@
+---
+title: "Machine Learning - parte 1"
+author: "Alejandro José Gómez García"
+date: "15/5/2022"
+output: html_document
+---
+Temas tratados en este documento:
+ - Preproceso y preparación de datos
+ - Modelos de regresión lineal
+ - Regresión Ridge y regresión Lasso
+ - Modelos de clasificación
+ 
+```{r, echo=FALSE, warning=FALSE}
+#Paquetes necesarios:
+library(caTools)
+library(dummies)
+library(leaps)
+library(glmnet)
+library(foreach)
+library(MASS)
+library(class)
+```
+
+EDD en R
+
+```{r}
+df<-read.csv("C:/Users/Shiro/Desktop/Datos/House_Price.csv")
+df
+str(df)
+summary(df)
+```
+
+Se observa que el parámetro de crime_rate presenta outliers dado que la mediana y la media se encuentran muy distantes, así como los valores mínimo y máximo
+
+```{r}
+hist(df$crime_rate,breaks = 40) #hago un histograma para apreciar mejor dichos outliers
+
+pairs(~price+crime_rate+n_hot_rooms+rainfall, data = df) #hago una matriz con histogramas de diagramas de dispersión (utilizando pares de variables) para observar los outliers de cada parámetro
+
+#Observo si hay algún valor anómalo en las variables cualitativas
+barplot(table(df$airport))
+barplot(table(df$waterbody))
+barplot(table(df$bus_ter))
+```
+
+Observaciones luego de analizar las variables:
+
+1. bus_term es una variable inútil dado que todos los valores son iguales (YES)
+2. n_hot_rooms y rainfall tienen outliers
+3. n_hos_beds tiene valores faltantes (NA)
+4. crime_rate tiene influencia sobre price
+
+
+TRATAMIENTO DE OUTLIERS en n_hot_rooms y rainfall
+
+Para eliminar los outliers SUPERIORES vamos primero a buscar el quantil 99 y ver su valor
+```{r}
+#n_hot_rooms
+quantile(df$n_hot_rooms, 0.99)
+
+#Una vez visto este valor, lo multiplicaré por 3 y lo asignaré a la variable uv (SE PUEDE USAR EL MULTIPLICADOR QUE SE DESEE SEGÚN LA SITUACIÓN)
+uv=3*quantile(df$n_hot_rooms, 0.99)
+uv
+
+#Luego, le asignaré dicho valor a todos los valores MAYORES al valor del quantil 99 original
+df$n_hot_rooms[df$n_hot_rooms>uv]<-uv
+
+#Comprobamos que la media y la mediana sean valores cercanos
+summary(df$n_hot_rooms)
+
+
+###rainfall
+#Hacemos el mismo procedimiento con rainfall, solo que los outliers en este caso son INFERIORES
+lv<-0.3*quantile(df$rainfall,0.01)
+df$rainfall[df$rainfall<lv]<-lv
+
+#Verificamos que la media y la mediana sean valores cercanos
+summary(df$rainfall)
+```
+
+
+TRATAMIENTO DE VALORES FALTANTES (NA) en n_hos_beds
+```{r}
+#Los valores faltantes pueden ser sustituidos por 0, por la media o por la mediana
+mean(df$n_hos_beds) #dado que tiene valores de NA, la media no se calculará de forma correcta
+
+mean(df$n_hos_beds,na.rm = TRUE) #por ello, se deben omitir del cálculo los valores NA con el parámetro na.rm
+
+which(is.na(df$n_hos_beds)) #la función which se utiliza para conocer los índices (la posición) de los valores que sigan cierto criterio, en este caso el criterio es "is.na" (valores que sean NA)
+
+#Ya tenemos la media y la posición de los valores de NA, así que asignamos a dichos valores el valor de la media
+#Para ello reciclamos las funciones utilizadas recientemente
+df$n_hos_beds[which(is.na(df$n_hos_beds))]<-mean(df$n_hos_beds,na.rm = TRUE)
+
+#Comprobamos que no haya valores faltantes
+summary(df$n_hos_beds)
+which(is.na(df$n_hos_beds))
+
+```
+
+TRATAMIENTO DE LA ESTACIONALIDAD:
+
+- La estacionalidad es la presencia de variaciones en los datos en períodos regulares del año (mensualmente, semanalmente, etc)
+- Esto puede provocar que los datos sufran variaciones que afecten a la moda o la mediana
+- Para evitar esto, la solución es calcular (cuando trabajamos con datos mensuales, por ejemplo) un factor de multiplicación para cada mes
+- Dicho factor se calcula al dividir la media de los meses cada año entre la media del mes deseado (en cada año)
+- Factor (enero para el año 1)=media (año 1)/media (enero)
+- Una vez calculado el factor se multiplica por el valor del mes calculado para el año calculado, y así sucesivamente para normalizar esos datos
+
+```{r}
+#Transformación de variables
+df
+pairs(~price + crime_rate, data=df)
+
+plot(df$price, df$crime_rate) #Observamos la relación entre ambas variables
+
+df$crime_rate=log(1+df$crime_rate) # Usamos el logaritmo para que dicha relación sea más lineal
+
+df$avg_dist=(df$dist1+df$dist2+df$dist3+df$dist4)/4 #Calculamos la distancia promedio para poder eliminar las 4 variables de distancia que dan información redundante
+
+df2<-df[,-7:-10] #Creamos otro dataset con las variables redundantes ya eliminadas
+df<-df2
+rm(df2)
+
+df<-df[,-14] #Eliminamos la columna 14 ya que era completamente inútil (bus_term) al ser todos los valores iguales
+
+```
+
+Creación de "Dummy variables"
+
+- Para realizar una correlación entre dos variables, evidentemente deben tener valores numéricos,
+- Por ello puede ser difícil incluir en estos análisis variables nominales.
+- Una solución a esto y una manera de incluir variables nominales es crear nuevas variables categóricas
+- Por ejemplo, si queremos ver la presencia o ausencia podemos sustituir los nombres por 0 y 1 respectivamente
+
+- Para ello necesitamos cargar el paquete "dummies"
+
+```{r}
+df<-dummy.data.frame(df) #Transformamos las variables nominales en categóricas
+View(df)
+```
+
+Esta función crea una variable por cada categoría, sin embargo, no todas son necesarias ya que hay información redundante
+
+- Por ello eliminamos esas variables redundantes.
+- Por ejemplo: si tenemos las variables "Presencia de x" y "Ausencia de x" podemos eliminar una de ellas (dado que los valores en ambas son 0 y 1, dan la misma información)
+
+```{r}
+df<-df[,-9] 
+df<-df[,-14]
+df
+```
+
+Análisis de correlación en los datos
+
+```{r}
+df
+simple_model<- lm(price~room_num, data = df)
+summary(simple_model)
+
+#El valor de t es menor a 2e-16, lo que quiere decir que estas dos variables sobre las que se realizó la regresión, no están muy correlacionadas
+
+plot(df$room_num,df$price) #hacemos el plot entre ambas variables para ver su dispersión
+abline(simple_model) #vemos la regresión lineal y cómo encaja en el plot anterior
+```
+
+Regresión Múltiple en R
+```{r}
+df
+multiple_model<-lm(price~.,data=df)
+summary(multiple_model)
+```
+
+Test Train Split en R
+
+- Este método consiste en dividir tu muestra en dos partes (como la construcción de una red neuronal)
+- El punto es entrenar un algoritmo con una parte de los datos y después testear el algoritmo resultante de dicho entrenamiento con la otra parte de los datos, la cual es desconocida parael algoritmo
+
+- Para ello necesitaremos el paquete "caTools"
+
+```{r}
+set.seed(0)
+split=sample.split(df,SplitRatio=0.8) #La función "split" es para dividir mis datos en dos grupos (entrenamiento y prueba)
+                                      #"SplitRatio" representa la proporción a la que queremos dividir nuestros datos, en este caso 0.8 (80% entrenamiento, 20% prueba)
+
+training_set<-subset(df,split==TRUE)  #Creamos un set de entrenamiento, "split==TRUE" significa que aplicamos la subdivisión realizada anteriormente (nos quedamos con el 80% de los datos)
+test_set<-subset(df,split==FALSE)     #Creamos un set de prueba, "split==TRUE" significa que nos quedamos con el 20% de los datos, lo opuesto al 80% del entrenamiento (por eso el FALSE y no el TRUE)
+
+lm_a<-lm(price~.,data=training_set)
+
+train_a=predict(lm_a,training_set)
+test_a=predict(lm_a,test_set)
+
+mean((training_set$price-train_a)^2) #Medimos el error cuadrático medio del set de entrenamiento (promedio de las diferencias al cuadrado entre el estimador y lo que estima)
+mean((test_set$price-test_a)^2)      #Medimos el error cuadrático medio del set de prueba (promedio de las diferencias al cuadrado entre el estimador y lo que estima)
+
+```
+
+Utilización de otros modelos lineales de regresión
+ 
+1. Selección de un subconjunto de variables
+
+En lugar de utilizar todas las variables, se utilizará un subconjunto de las variables disponibles
+ 
+Existen tres variantes de este método:
+
+ 1.1 El método de "selección del mejor subconjunto (EXHAUSTIVO)" se basa en entrenar el modelo con todos los posibles subconjuntos de las variables. Para x variables, el número total de subconjuntos es 2^x.
+ 
+ 1.2 En la "selección progresiva hacia adelante" empezamos a entrenar el modelo sin predictores, y continuamos añadiendo predictores uno por uno hasta añadirlos todos
+ 
+ 1.3 En la "selección progresiva hacia atrás" empezamos a entrenar el modelo con todos predictores, y continuamos eliminando predictores uno por uno hasta eliminarlos todos
+
+- Para ejecutar cualquiera de los tres métodos utilizamos la función regsubsets 
+
+```{r}
+lm_best<-regsubsets(price~.,data = df,nvmax=15, method = "exhaustive") #Utilizamos el método exhaustivo
+summary(lm_best)
+summary(lm_best)$adjr2 #Usamos adjr2 para calcular el coeficiente de regresión de los modelos lineales
+which.max(summary(lm_best)$adjr2) #Ubicamos cual es la posición del mayor coeficiente de regresión
+
+coef(lm_best,8) #Extraemos los valores y varables del modelo de mayor coeficiente de regresión
+
+
+lm_forward<-regsubsets(price~.,data = df,nvmax=15, method = "forward") #Utilizamos ahora el método de selección progresiva hacia adelante
+summary(lm_forward)
+summary(lm_forward)$adjr2 #Usamos adjr2 para calcular el coeficiente de regresión de los modelos lineales
+which.max(summary(lm_forward)$adjr2) #Ubicamos cual es la posición del mayor coeficiente de regresión
+
+coef(lm_forward,8)
+
+#NOTA: Para usar el método de selección progresiva hacia atrás solo debemos ajustar el parámetro method="backward"
+lm_forward<-regsubsets(price~.,data = df,nvmax=15, method = "backward")
+```
+
+2. Método de Contracción
+ - Se intenta regularizar o reducir el coeficiente de algunas variables a cero.
+
+2.1 En la regresión de Ridge (Ridge Regression) intentaremos reducir los coeficientes de la variable hacia cero agregando penalización por contracción. Debido a esta penalización por contracción, la regresión de la cresta varía con la escala de la variable independiente, por lo tanto, necesitamos estandarizar los valores de estas variables. 
+       
+```{r}
+x<-model.matrix(price~.,data = df) [,-1] #No nos interesa la columna con la variable "price" así que la omitimos
+y=df$price
+grid=10^seq(10,-2,length=100) #Creamos todas las posibles "lambdas" (parámetro de ajuste)
+grid
+
+lm_ridge=glmnet(x,y,alpha = 0, lambda = grid)  #Para alpha=0 se usa la regressión Ridge, si es =1 entonces se usa lasso
+summary(lm_ridge)
+cv_fit=cv.glmnet(x,y,alpha = 0, lambda = grid) #esto nos muestra todos los valores posibles de lambda
+cv_fit
+plot(cv_fit)   #graficamos los "mean-squared errors"
+
+# Ahora necesitamos buscar qué valor de lambda corresponde al mínimo error cuadrático medio
+optim_lambda=cv_fit$lambda.min
+```
+
+Podemos saber cual es la TTS (total sum squares) o suma de cuadrados totales. Esto te dice cuánta variación existe en una variable dependiente. La suma de cuadrados es la suma del cuadrado de variación, donde la variación se define como el margen entre cada valor individual y la media. Para determinar la suma de cuadrados, la distancia entre cada punto de datos y la línea de mejor ajuste se eleva al cuadrado y luego se suma. La línea de mejor ajuste minimizará este valor.
+
+```{r}
+tss=sum((y-mean(y))^2)
+```
+
+Podemos conocer también la RSS (residual sum squares) o suma de cuadrados residual
+Es una medida de la discrepancia entre los datos y un modelo de estimación
+
+```{r}
+y_a=predict(lm_ridge,s = optim_lambda,newx = x) #Primero predecimos los valores del modelo lineal utilizando el valor óptimo de lambda ya calculado
+
+rss=sum((y_a-y)^2)  #calculamos el RSS
+
+#Así, podemos calcular tabién R2. R cuadrado (R2) es una medida estadística que representa la proporción de la varianza de una variable dependiente que se explica por una variable independiente o variables en un modelo de regresión. 
+
+#R-cuadrado = Variabilidad explicada / Variabilidad total = 1 - RSS/TSS
+
+rsq=1-rss/tss
+```
+
+2.2 En la regresión de Lasso (Lasso Regression), intentaremos reducir los coeficientes de la variable hacia cero agregando una penalización por contracción. En esta técnica, para un valor suficientemente grande del parámetro de ajuste (controla el grado de penalización), varios coeficientes se convertirán en cero, excluyendo dichas variables para el análisis. 
+
+```{r}
+lm_lasso=glmnet(x,y,alpha = 1,lambda=grid)
+cv_fit2=cv.glmnet(x,y,alpha = 1,lambda=grid)
+plot(cv_fit2)
+#El resto del procedimiento es exactamente igual
+```
+
+Lasso tiende a generar "coeficientes dispersos": vectores de coeficientes en los que la mayoría de ellos toman el valor cero. Esto quiere decir que el modelo va a ignorar algunas de las características predictivas, lo que puede ser considerado un tipo de selección automática de características. El incluir menos características supone un modelo más sencillo de interpretar que puede poner de manifiesto las características más importantes del conjunto de datos. En el caso de que exista cierta correlación entre las características predictivas, Lasso tenderá a escoger una de ellas al azar. Esto significa que, aunque Ridge es una buena opción por defecto, si sospechamos que la distribución de los datos viene determinada por un subconjunto de las características predictivas, Lasso podría devolver mejores resultados.
